@@ -1,0 +1,6 @@
+venv-backend/
+detection/best.pt
+__pycache__/
+*.pyc
+db.sqlite3
+media/
