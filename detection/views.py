@@ -1,6 +1,7 @@
 import os
 import cv2
 import tempfile
+import numpy as np
 from django.core.files.base import ContentFile
 from django.apps import apps
 from rest_framework.views import APIView
@@ -8,7 +9,6 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import DetectionResult
-
 
 # ✅ Define YOLO model loader (lazy load, only once)
 def get_model():
@@ -20,6 +20,18 @@ def get_model():
     return cfg.yolo_model
 
 
+# Define colors for each class (BGR format)
+CLASS_COLORS = {
+    "rach": (0, 0, 255),       # Red
+    "vo_kinh": (0, 255, 0),    # Green
+    "mop_lom": (255, 0, 0),    # Blue
+    "be_den": (0, 255, 255),   # Yellow
+    "tray_son": (255, 0, 255), # Magenta
+    "mat_bo_phan": (255, 255, 0), # Cyan
+    "thung": (128, 128, 128)   # Gray
+}
+
+
 class DamageDetectView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
@@ -28,7 +40,7 @@ class DamageDetectView(APIView):
             return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
 
         uploaded = request.FILES['file']
-        model = get_model()  # ✅ now defined
+        model = get_model()
         suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
 
         # Save temp file for YOLO
@@ -43,11 +55,25 @@ class DamageDetectView(APIView):
             detections = []
 
             for r in results:
+                # ✅ If segmentation masks exist, resize and overlay them
+                if hasattr(r, 'masks') and r.masks is not None:
+                    masks = r.masks.data.cpu().numpy()  # (num_masks, mask_h, mask_w)
+                    for idx, mask in enumerate(masks):
+                        # Resize mask to match original image size
+                        mask_resized = cv2.resize(mask, (img.shape[1], img.shape[0]))
+                        cls_idx = int(r.boxes[idx].cls[0])
+                        label = model.names[cls_idx]
+                        color = np.array(CLASS_COLORS.get(label, (0, 255, 0)), dtype=np.uint8)
+                        # Overlay mask on image
+                        img[mask_resized > 0.5] = img[mask_resized > 0.5] * 0.5 + color * 0.5
+
+                # Process bounding boxes
                 for box in r.boxes:
                     xyxy = box.xyxy[0].tolist()
                     conf = float(box.conf[0])
-                    cls = int(box.cls[0])
-                    label = model.names[cls] if hasattr(model, "names") else str(cls)
+                    cls_idx = int(box.cls[0])
+                    label = model.names[cls_idx]
+                    color = CLASS_COLORS.get(label, (0, 255, 0))  # Default green
 
                     detections.append({
                         "class": label,
@@ -55,11 +81,11 @@ class DamageDetectView(APIView):
                         "bbox": [float(x) for x in xyxy]
                     })
 
-                    # Draw bounding box
+                    # Draw bounding box with class-specific color
                     x1, y1, x2, y2 = map(int, xyxy)
-                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
                     cv2.putText(img, f"{label} {conf:.2f}", (x1, max(15, y1 - 10)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
             # Save annotated image in memory
             _, img_encoded = cv2.imencode('.jpg', img)
