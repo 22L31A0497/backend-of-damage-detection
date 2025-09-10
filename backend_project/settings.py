@@ -17,13 +17,17 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-_g(j+ed=4i^6oaejs9i4obd^tq6%8+6^n5vlhc8p^8x=n$z^x@'
+SECRET_KEY = os.environ.get(
+    "SECRET_KEY",
+    "django-insecure-_g(j+ed=4i^6oaejs9i4obd^tq6%8+6^n5vlhc8p^8x=n$z^x@"  # fallback for local dev
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False  # ❌ Turn off for production
+DEBUG = os.environ.get("DEBUG", "False") == "True"
 
 # On Render, set this dynamically or just allow all for testing
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
+
 
 # CORS settings
 CORS_ALLOW_ALL_ORIGINS = True

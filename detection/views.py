@@ -7,17 +7,11 @@ import cv2
 import tempfile
 import numpy as np
 from django.core.files.base import ContentFile
-from django.apps import apps
 from .models import DetectionResult
+from detection.load_model import load_model  # ✅ Import load_model
 
-# ✅ Define YOLO model loader (lazy load, only once)
-def get_model():
-    cfg = apps.get_app_config('detection')
-    if getattr(cfg, 'yolo_model', None) is None:
-        from ultralytics import YOLO
-        model_path = os.path.join(os.path.dirname(__file__), "best.pt")
-        cfg.yolo_model = YOLO(model_path)
-    return cfg.yolo_model
+# ✅ Load YOLO model once
+model = load_model()
 
 # ✅ Define colors for each class
 CLASS_COLORS = {
@@ -39,7 +33,6 @@ class DamageDetectView(APIView):
             return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
 
         uploaded = request.FILES['file']
-        model = get_model()
         suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
 
         # Save temp file for YOLO
