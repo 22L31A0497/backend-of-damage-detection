@@ -1,27 +1,25 @@
+# detection/views.py
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework import status
-import os
-import cv2
-import tempfile
-import numpy as np
+import os, cv2, tempfile, numpy as np
 from django.core.files.base import ContentFile
 from .models import DetectionResult
-from detection.load_model import load_model  # ✅ Import load_model
+from .apps import DetectionConfig   # ✅ Import the model from AppConfig
 
-# ✅ Load YOLO model once
-model = load_model()
+# ✅ Use the model already loaded in apps.py
+model = DetectionConfig.yolo_model
 
 # ✅ Define colors for each class
 CLASS_COLORS = {
-    "rach": (0, 0, 255),       # Red
-    "vo_kinh": (0, 255, 0),    # Green
-    "mop_lom": (255, 0, 0),    # Blue
-    "be_den": (0, 255, 255),   # Yellow
-    "tray_son": (255, 0, 255), # Magenta
-    "mat_bo_phan": (255, 255, 0), # Cyan
-    "thung": (128, 128, 128)   # Gray
+    "rach": (0, 0, 255),
+    "vo_kinh": (0, 255, 0),
+    "mop_lom": (255, 0, 0),
+    "be_den": (0, 255, 255),
+    "tray_son": (255, 0, 255),
+    "mat_bo_phan": (255, 255, 0),
+    "thung": (128, 128, 128)
 }
 
 
@@ -29,13 +27,15 @@ class DamageDetectView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, *args, **kwargs):
+        if not model:  # 🔑 fail-safe
+            return Response({"error": "YOLO model not loaded"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         if 'file' not in request.FILES:
             return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
 
         uploaded = request.FILES['file']
         suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
 
-        # Save temp file for YOLO
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             for chunk in uploaded.chunks():
                 tmp.write(chunk)
@@ -50,35 +50,27 @@ class DamageDetectView(APIView):
 
             for r in results:
                 if hasattr(r, 'masks') and r.masks is not None:
-                    masks = r.masks.data.cpu().numpy()  # (num_masks, mask_h, mask_w)
+                    masks = r.masks.data.cpu().numpy()
 
                     for idx, mask in enumerate(masks):
-                        # Resize mask to original image size
                         mask_resized = cv2.resize(mask, (img.shape[1], img.shape[0]))
-
-                        # Count pixels in this mask
                         mask_pixels = np.sum(mask_resized > 0.5)
                         total_mask_pixels += mask_pixels
 
-                        # Get class info
                         cls_idx = int(r.boxes[idx].cls[0])
                         label = model.names[cls_idx]
                         conf = float(r.boxes[idx].conf[0])
                         max_conf = max(max_conf, conf)
 
-                        # ✅ Use tuple for drawing, numpy array for blending
                         color_tuple = tuple(CLASS_COLORS.get(label, (0, 255, 0)))
                         color_array = np.array(color_tuple, dtype=np.uint8)
 
-                        # Overlay mask
                         img[mask_resized > 0.5] = (
                             img[mask_resized > 0.5] * 0.5 + color_array * 0.5
                         )
 
-                        # Per-object damage percentage
                         obj_damage = (mask_pixels / total_pixels * 100) if total_pixels > 0 else 0
 
-                        # Add detection entry
                         detections.append({
                             "class": label,
                             "confidence": round(conf * 100, 2),
@@ -86,7 +78,6 @@ class DamageDetectView(APIView):
                             "bbox": [float(x) for x in r.boxes[idx].xyxy[0].tolist()]
                         })
 
-                        # Draw box + label
                         x1, y1, x2, y2 = map(int, r.boxes[idx].xyxy[0].tolist())
                         cv2.rectangle(img, (x1, y1), (x2, y2), color_tuple, 2)
                         cv2.putText(
@@ -99,21 +90,17 @@ class DamageDetectView(APIView):
                             2
                         )
 
-            # ✅ Overall damage percentage
             overall_damage = (total_mask_pixels / total_pixels * 100) if total_pixels > 0 else 0
 
-            # Save annotated image in memory
             _, img_encoded = cv2.imencode('.jpg', img)
             annotated_file = ContentFile(img_encoded.tobytes(), name=f"annotated_{uploaded.name}")
 
-            # Save record in DB
             record = DetectionResult.objects.create(
                 image=uploaded,
                 annotated_image=annotated_file,
                 detections_json=detections
             )
 
-            # ✅ Final response
             return Response({
                 "id": record.id,
                 "overallDamagePercentage": round(overall_damage, 2),
